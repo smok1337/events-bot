@@ -2,6 +2,7 @@ const express = require('express');
 const mineflayer = require('mineflayer');
 const Tesseract = require('tesseract.js');
 const Jimp = require('jimp');
+const { SocksClient } = require('socks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,7 +50,7 @@ async function solveCaptcha() {
     const mapId = mapItem.nbt?.value?.map?.value;
     console.log(`[CAPTCHA] ID карты: ${mapId}`);
 
-    const mapData = bot.world?.getMapById?.(mapId) || bot._mapData?.[mapId];
+    const mapData = bot._mapData?.[mapId];
     if (!mapData || !mapData.data) {
       console.log('[CAPTCHA] Данные карты недоступны');
       captchaSolving = false;
@@ -124,60 +125,80 @@ function parseInventory() {
 }
 
 function connectToMinecraft() {
-  bot = mineflayer.createBot({
-  host: 'mc.aresmine.ru',
-  port: 25565,
-  username: process.env.MC_USERNAME || 'EventBot',
-  auth: 'offline'
-});
-
-  console.log('[BOT] Подключение к aresmine.ru...');
-
-  bot.on('login', () => console.log('[BOT] Авторизован'));
-  bot.on('spawn', () => {
-  console.log('[BOT] Заспавнился');
-  setTimeout(() => {
-    bot.chat('/srv grief');
-    console.log('[BOT] Отправлен /srv grief');
-  }, 3000);
-});
-  bot.on('error', err => console.error('[ERROR]', err.message));
-  bot.on('kicked', reason => {
-    console.log('[BOT] Кикнут:', reason);
-    setTimeout(connectToMinecraft, 5000);
-  });
-  bot.on('end', () => {
-    console.log('[BOT] Отключён, переподключение...');
-    setTimeout(connectToMinecraft, 5000);
-  });
-
-  bot.on('message', (msg) => {
-    const text = msg.toString();
-    console.log('[MSG]', text);
-
-    if (text.includes('Введите номер с картинки')) {
-      console.log('[CAPTCHA] Запрос капчи обнаружен');
-      setTimeout(solveCaptcha, 500);
+  SocksClient.createConnection({
+    proxy: {
+      host: '95.106.209.89',
+      port: 4145,
+      type: 4
+    },
+    command: 'connect',
+    destination: {
+      host: 'mc.aresmine.ru',
+      port: 25565
     }
-    if (text.includes('Войдите на сервер') || text.includes('/L пароль')) {
-      bot.chat('/L ' + (process.env.MC_PASSWORD || 'password123'));
-      console.log('[BOT] Отправлен /L');
+  }, (err, info) => {
+    if (err) {
+      console.error('[PROXY] Ошибка прокси:', err.message);
+      setTimeout(connectToMinecraft, 5000);
+      return;
     }
-    if (text.includes('Зарегистрируйтесь') || text.includes('/reg пароль')) {
-      const pass = process.env.MC_PASSWORD || 'password123';
-      bot.chat(`/reg ${pass} ${pass}`);
-      console.log('[BOT] Отправлен /reg');
-    }
-  });
 
-  bot._client.on('packet', (packet) => {
-    if (packet.name === 'map') {
-      if (!bot._mapData) bot._mapData = {};
-      bot._mapData[packet.itemDamage] = packet;
-    }
-    if (awaitingInventory && packet.name === 'open_window') {
-      setTimeout(parseInventory, 500);
-    }
+    console.log('[PROXY] Подключено через прокси');
+
+    bot = mineflayer.createBot({
+      host: 'mc.aresmine.ru',
+      port: 25565,
+      username: process.env.MC_USERNAME || 'EventBot',
+      auth: 'offline',
+      stream: info.socket
+    });
+
+    bot.on('login', () => console.log('[BOT] Авторизован'));
+    bot.on('spawn', () => {
+      console.log('[BOT] Заспавнился');
+      setTimeout(() => {
+        bot.chat('/srv grief');
+        console.log('[BOT] Отправлен /srv grief');
+      }, 3000);
+    });
+    bot.on('error', err => console.error('[ERROR]', err.message));
+    bot.on('kicked', reason => {
+      console.log('[BOT] Кикнут:', reason);
+      setTimeout(connectToMinecraft, 5000);
+    });
+    bot.on('end', () => {
+      console.log('[BOT] Отключён, переподключение...');
+      setTimeout(connectToMinecraft, 5000);
+    });
+
+    bot.on('message', (msg) => {
+      const text = msg.toString();
+      console.log('[MSG]', text);
+
+      if (text.includes('Введите номер с картинки')) {
+        console.log('[CAPTCHA] Запрос капчи обнаружен');
+        setTimeout(solveCaptcha, 500);
+      }
+      if (text.includes('Войдите на сервер') || text.includes('/L пароль')) {
+        bot.chat('/L ' + (process.env.MC_PASSWORD || 'password123'));
+        console.log('[BOT] Отправлен /L');
+      }
+      if (text.includes('Зарегистрируйтесь') || text.includes('/reg пароль')) {
+        const pass = process.env.MC_PASSWORD || 'password123';
+        bot.chat(`/reg ${pass} ${pass}`);
+        console.log('[BOT] Отправлен /reg');
+      }
+    });
+
+    bot._client.on('packet', (packet) => {
+      if (packet.name === 'map') {
+        if (!bot._mapData) bot._mapData = {};
+        bot._mapData[packet.itemDamage] = packet;
+      }
+      if (awaitingInventory && packet.name === 'open_window') {
+        setTimeout(parseInventory, 500);
+      }
+    });
   });
 }
 
