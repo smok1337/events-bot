@@ -127,9 +127,9 @@ function parseInventory() {
 function connectToMinecraft() {
   SocksClient.createConnection({
     proxy: {
-  host: '155.212.133.136',
+  host: '176.114.86.151',
   port: 1080,
-  type: 4
+  type: 5
 },
     command: 'connect',
     destination: {
