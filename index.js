@@ -125,7 +125,7 @@ function parseInventory() {
 
 function connectToMinecraft() {
   bot = mineflayer.createBot({
-  host: 'aresmine.ru',
+  host: 'mc.aresmine.ru',
   port: 25565,
   username: process.env.MC_USERNAME || 'EventBot',
   auth: 'offline'
