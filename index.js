@@ -135,7 +135,13 @@ function connectToMinecraft() {
   console.log('[BOT] Подключение к aresmine.ru...');
 
   bot.on('login', () => console.log('[BOT] Авторизован'));
-  bot.on('spawn', () => console.log('[BOT] Заспавнился'));
+  bot.on('spawn', () => {
+  console.log('[BOT] Заспавнился');
+  setTimeout(() => {
+    bot.chat('/srv grief');
+    console.log('[BOT] Отправлен /srv grief');
+  }, 3000);
+});
   bot.on('error', err => console.error('[ERROR]', err.message));
   bot.on('kicked', reason => {
     console.log('[BOT] Кикнут:', reason);
