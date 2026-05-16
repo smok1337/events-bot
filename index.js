@@ -127,10 +127,10 @@ function parseInventory() {
 function connectToMinecraft() {
   SocksClient.createConnection({
     proxy: {
-      host: '95.106.209.89',
-      port: 4145,
-      type: 4
-    },
+  host: '130.61.119.46',
+  port: 3128,
+  type: 4
+},
     command: 'connect',
     destination: {
       host: 'mc.aresmine.ru',
