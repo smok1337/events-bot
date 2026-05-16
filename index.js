@@ -1,189 +1,209 @@
 const express = require('express');
 const mineflayer = require('mineflayer');
+const Tesseract = require('tesseract.js');
+const Jimp = require('jimp');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 let bot = null;
 let eventsData = null;
 let awaitingInventory = false;
+let captchaSolving = false;
 
-// Функция для парсинга времени из лора
 function parseTimeFromLore(loreText) {
   const match = loreText.match(/(\d+)ч\s*(\d+)м\s*(\d+)с/);
   if (!match) return null;
-  
-  const hours = parseInt(match[1]);
-  const minutes = parseInt(match[2]);
-  const seconds = parseInt(match[3]);
-  
-  return hours * 3600 + minutes * 60 + seconds;
+  return parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]);
 }
 
-// Функция для определения активности события
 function parseEventStatus(loreText) {
-  const isActive = loreText.includes('завершится через');
-  const secondsRemaining = parseTimeFromLore(loreText);
-  
   return {
-    active: isActive,
-    secondsRemaining: secondsRemaining
+    active: loreText.includes('завершится через'),
+    secondsRemaining: parseTimeFromLore(loreText)
   };
 }
 
-// Подключение к серверу Minecraft
-function connectToMinecraft() {
-  const options = {
-    host: 'aresmine.ru',
-    port: 25565,
-    username: process.env.MC_EMAIL,
-    password: process.env.MC_PASSWORD,
-    version: '1.21'
-  };
+async function solveCaptcha() {
+  if (captchaSolving) return;
+  captchaSolving = true;
+  console.log('[CAPTCHA] Начало решения капчи...');
 
-  console.log(`[BOT] Подключение к серверу ${options.host}:${options.port}...`);
-  
-  bot = mineflayer.createBot(options);
+  try {
+    await new Promise(r => setTimeout(r, 1000));
 
-  bot.on('login', () => {
-    console.log('[BOT] Успешно авторизирован на сервере');
-  });
-
-  bot.on('spawn', () => {
-    console.log('[BOT] Спавнулся на сервере');
-  });
-
-  bot.on('chat', (username, message) => {
-    console.log(`[CHAT] ${username}: ${message}`);
-  });
-
-  bot.on('error', (err) => {
-    console.error('[ERROR] Ошибка подключения:', err);
-  });
-
-  bot.on('kicked', (reason) => {
-    console.log('[BOT] Исключен с сервера:', reason);
-    setTimeout(() => connectToMinecraft(), 5000);
-  });
-
-  bot.on('end', () => {
-    console.log('[BOT] Соединение разорвано');
-    setTimeout(() => connectToMinecraft(), 5000);
-  });
-
-  // Перехват пакета открытия инвентаря
-  bot._client.on('packet', (packet) => {
-    if (awaitingInventory && packet.name === 'open_window') {
-      console.log('[PACKET] Получен пакет открытия инвентаря');
-      setTimeout(() => parseInventory(), 500);
+    let mapItem = null;
+    for (const item of bot.inventory.slots) {
+      if (item && item.name === 'filled_map') {
+        mapItem = item;
+        break;
+      }
     }
-  });
+
+    if (!mapItem) {
+      console.log('[CAPTCHA] Карта не найдена в инвентаре');
+      captchaSolving = false;
+      return;
+    }
+
+    const mapId = mapItem.nbt?.value?.map?.value;
+    console.log(`[CAPTCHA] ID карты: ${mapId}`);
+
+    const mapData = bot.world?.getMapById?.(mapId) || bot._mapData?.[mapId];
+    if (!mapData || !mapData.data) {
+      console.log('[CAPTCHA] Данные карты недоступны');
+      captchaSolving = false;
+      return;
+    }
+
+    const width = 128, height = 128;
+    const image = new Jimp({ width: width * 3, height: height * 3, color: 0xffffffff });
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const colorIndex = mapData.data[y * width + x];
+        const dark = colorIndex < 50 ? 0 : 255;
+        const color = Jimp.rgbaToInt(dark, dark, dark, 255);
+        for (let dy = 0; dy < 3; dy++)
+          for (let dx = 0; dx < 3; dx++)
+            image.setPixelColor(color, x * 3 + dx, y * 3 + dy);
+      }
+    }
+
+    image.grayscale().contrast(1);
+    const buffer = await image.getBuffer('image/png');
+
+    const result = await Tesseract.recognize(buffer, 'eng', {
+      tessedit_char_whitelist: '0123456789'
+    });
+
+    const numbers = result.data.text.replace(/\D/g, '').trim();
+    console.log(`[CAPTCHA] Распознано: "${numbers}"`);
+
+    if (numbers) {
+      bot.chat(numbers);
+      console.log('[CAPTCHA] Ответ отправлен');
+    } else {
+      console.log('[CAPTCHA] Не удалось распознать цифры');
+    }
+  } catch (err) {
+    console.error('[CAPTCHA] Ошибка:', err.message);
+  } finally {
+    captchaSolving = false;
+  }
 }
 
-// Функция для парсинга инвентаря
 function parseInventory() {
-  if (!bot || !bot.inventory) {
-    console.log('[ERROR] Инвентарь не доступен');
-    awaitingInventory = false;
-    return;
-  }
-
+  if (!bot?.inventory) { awaitingInventory = false; return; }
   const events = [];
-  
-  // Получаем все предметы из инвентаря
-  for (let i = 0; i < bot.inventory.slots.length; i++) {
-    const item = bot.inventory.slots[i];
-    
-    if (item && item.name) {
-      const itemName = item.displayName || item.name;
-      let lore = [];
-      
-      // Извлекаем лор из NBT данных если доступен
-      if (item.nbt && item.nbt.value && item.nbt.value.display) {
-        const display = item.nbt.value.display.value;
-        if (display.Lore && display.Lore.value.value) {
-          lore = display.Lore.value.value.map(line => line.value);
-        }
-      }
-      
-      // Ищем информацию о времени в лоре
-      for (const loreLine of lore) {
-        if (loreLine.includes('ч') && loreLine.includes('м') && loreLine.includes('с')) {
-          const status = parseEventStatus(loreLine);
-          
-          events.push({
-            name: itemName,
-            secondsRemaining: status.secondsRemaining,
-            active: status.active
-          });
-          
-          console.log(`[EVENT] Найдено событие: ${itemName}, активно: ${status.active}, осталось: ${status.secondsRemaining}с`);
-          break;
-        }
+
+  for (const item of bot.inventory.slots) {
+    if (!item?.name) continue;
+    const itemName = item.displayName || item.name;
+    let lore = [];
+
+    if (item.nbt?.value?.display) {
+      const display = item.nbt.value.display.value;
+      if (display.Lore?.value?.value)
+        lore = display.Lore.value.value.map(l => l.value);
+    }
+
+    for (const line of lore) {
+      if (line.includes('ч') && line.includes('м') && line.includes('с')) {
+        const status = parseEventStatus(line);
+        events.push({ name: itemName, ...status });
+        console.log(`[EVENT] ${itemName} active:${status.active} seconds:${status.secondsRemaining}`);
+        break;
       }
     }
   }
-  
+
   eventsData = events;
   awaitingInventory = false;
-  console.log(`[INVENTORY] Спарсено ${events.length} событий`);
+  console.log(`[INVENTORY] Найдено событий: ${events.length}`);
 }
 
-// Express endpoints
-app.get('/ping', (req, res) => {
-  console.log('[API] GET /ping');
-  res.json({ status: 'ok' });
-});
+function connectToMinecraft() {
+  bot = mineflayer.createBot({
+    host: 'aresmine.ru',
+    port: 25565,
+    username: process.env.MC_USERNAME || 'EventBot',
+    auth: 'offline',
+    version: '1.21.1'
+  });
+
+  console.log('[BOT] Подключение к aresmine.ru...');
+
+  bot.on('login', () => console.log('[BOT] Авторизован'));
+  bot.on('spawn', () => console.log('[BOT] Заспавнился'));
+  bot.on('error', err => console.error('[ERROR]', err.message));
+  bot.on('kicked', reason => {
+    console.log('[BOT] Кикнут:', reason);
+    setTimeout(connectToMinecraft, 5000);
+  });
+  bot.on('end', () => {
+    console.log('[BOT] Отключён, переподключение...');
+    setTimeout(connectToMinecraft, 5000);
+  });
+
+  bot.on('message', (msg) => {
+    const text = msg.toString();
+    console.log('[MSG]', text);
+
+    if (text.includes('Введите номер с картинки')) {
+      console.log('[CAPTCHA] Запрос капчи обнаружен');
+      setTimeout(solveCaptcha, 500);
+    }
+    if (text.includes('Войдите на сервер') || text.includes('/L пароль')) {
+      bot.chat('/L ' + (process.env.MC_PASSWORD || 'password123'));
+      console.log('[BOT] Отправлен /L');
+    }
+    if (text.includes('Зарегистрируйтесь') || text.includes('/reg пароль')) {
+      const pass = process.env.MC_PASSWORD || 'password123';
+      bot.chat(`/reg ${pass} ${pass}`);
+      console.log('[BOT] Отправлен /reg');
+    }
+  });
+
+  bot._client.on('packet', (packet) => {
+    if (packet.name === 'map') {
+      if (!bot._mapData) bot._mapData = {};
+      bot._mapData[packet.itemDamage] = packet;
+    }
+    if (awaitingInventory && packet.name === 'open_window') {
+      setTimeout(parseInventory, 500);
+    }
+  });
+}
+
+app.get('/ping', (req, res) => res.json({ status: 'ok' }));
 
 app.get('/events', (req, res) => {
-  console.log('[API] GET /events - запрос событий');
-  
-  if (!bot || !bot.entity) {
-    console.log('[ERROR] Бот не подключен к серверу');
-    return res.status(503).json({ error: 'Bot not connected' });
-  }
+  if (!bot?.entity) return res.status(503).json({ error: 'Bot not connected' });
 
   awaitingInventory = true;
   eventsData = null;
-  
-  // Пишем команду /a в чат
-  console.log('[BOT] Отправка команды /a');
   bot.chat('/a');
-  
-  // Ждем парсинга инвентаря с таймаутом
+  console.log('[API] /events запрос, отправлен /a');
+
   const timeout = setTimeout(() => {
     if (awaitingInventory) {
       awaitingInventory = false;
-      console.log('[ERROR] Таймаут ожидания открытия инвентаря');
-      res.status(504).json({ error: 'Inventory timeout' });
+      res.status(504).json({ error: 'Timeout' });
     }
   }, 5000);
 
-  // Проверяем готовность результатов
-  const checkInterval = setInterval(() => {
+  const interval = setInterval(() => {
     if (eventsData !== null) {
-      clearInterval(checkInterval);
+      clearInterval(interval);
       clearTimeout(timeout);
-      console.log('[API] Возврат результатов:', eventsData);
       res.json(eventsData);
     }
   }, 100);
 });
 
-// Запуск Express сервера
-app.listen(PORT, () => {
-  console.log(`[EXPRESS] HTTP сервер запущен на порту ${PORT}`);
-  console.log(`[EXPRESS] Доступные endpoints: /ping, /events`);
-});
+app.listen(PORT, () => console.log(`[EXPRESS] Запущен на порту ${PORT}`));
 
-// Запуск подключения к Minecraft
-console.log('[STARTUP] Запуск events-bot...');
-console.log(`[CONFIG] MC_EMAIL: ${process.env.MC_EMAIL ? 'установлен' : 'НЕ установлен'}`);
-console.log(`[CONFIG] MC_PASSWORD: ${process.env.MC_PASSWORD ? 'установлен' : 'НЕ установлен'}`);
-
-if (!process.env.MC_EMAIL || !process.env.MC_PASSWORD) {
-  console.error('[ERROR] Отсутствуют переменные окружения MC_EMAIL или MC_PASSWORD');
-  process.exit(1);
-}
-
+console.log('[STARTUP] events-bot запускается...');
+console.log(`[CONFIG] MC_USERNAME: ${process.env.MC_USERNAME || 'EventBot'}`);
 connectToMinecraft();
