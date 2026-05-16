@@ -146,13 +146,13 @@ function connectToMinecraft() {
     console.log('[PROXY] Подключено через прокси');
 
     bot = mineflayer.createBot({
-      host: 'mc.aresmine.ru',
-      port: 25565,
-      username: process.env.MC_USERNAME || 'EventBot',
-      auth: 'offline',
-      stream: info.socket
-    });
-
+  host: 'mc.aresmine.ru',
+  port: 25565,
+  username: process.env.MC_USERNAME || 'EventBot',
+  auth: 'offline',
+  stream: info.socket,
+  version: '1.21.1'
+});
     bot.on('login', () => console.log('[BOT] Авторизован'));
     bot.on('spawn', () => {
       console.log('[BOT] Заспавнился');
