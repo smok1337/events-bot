@@ -191,7 +191,8 @@ function connectToMinecraft() {
     });
 
     bot._client.on('packet', (packet) => {
-      if (packet.name === 'map') {
+  if (!packet || !packet.name) return;
+  if (packet.name === 'map') {
         if (!bot._mapData) bot._mapData = {};
         bot._mapData[packet.itemDamage] = packet;
       }
